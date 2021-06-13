@@ -125,3 +125,34 @@ resource "azurerm_cognitive_account" "cognotive_api" {
     Acceptance = "Prod"
   }
 }
+
+
+# Key vault
+data "azurerm_client_config" "current" {
+}
+
+resource "azurerm_key_vault" "this" {
+  name                     = "${var.prefix}-kv"
+  location                 = azurerm_resource_group.myresourcegroup.location
+  resource_group_name      = azurerm_resource_group.myresourcegroup.name
+  tenant_id                = data.azurerm_client_config.current.tenant_id
+  purge_protection_enabled = false
+  soft_delete_retention_days  = 7
+  sku_name                 = "standard"
+}
+
+resource "azurerm_key_vault_access_policy" "this" {
+  key_vault_id       = azurerm_key_vault.this.id
+  tenant_id          = data.azurerm_client_config.current.tenant_id
+  object_id          = data.azurerm_client_config.current.object_id
+  secret_permissions = ["delete", "get", "list", "set"]
+}
+
+resource "databricks_secret_scope" "kv" {
+  name = "keyvault-managed"
+
+  keyvault_metadata {
+    resource_id = azurerm_key_vault.this.id
+    dns_name = azurerm_key_vault.this.vault_uri
+  }
+}
