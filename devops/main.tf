@@ -35,18 +35,13 @@ resource "azurerm_storage_account" "comicuniverse" {
   account_replication_type = "LRS"
 }
 
-resource "azurerm_storage_container" "l-wiki" {
-  name                  = "l-wiki"
+resource "azurerm_storage_container" "load" {
+  name                  = "load"
   storage_account_name  = azurerm_storage_account.comicuniverse.name
   container_access_type = "private"
 }
-resource "azurerm_storage_container" "t-wiki" {
-  name                  = "t-wiki"
-  storage_account_name  = azurerm_storage_account.comicuniverse.name
-  container_access_type = "private"
-}
-resource "azurerm_storage_container" "r-wiki" {
-  name                  = "r-wiki"
+resource "azurerm_storage_container" "transform" {
+  name                  = "transform"
   storage_account_name  = azurerm_storage_account.comicuniverse.name
   container_access_type = "private"
 }
@@ -84,7 +79,7 @@ resource "databricks_cluster" "single_node" {
   cluster_name            = "${var.prefix}-Single-Node-Cluster"
   spark_version           = data.databricks_spark_version.latest_lts.id
   node_type_id            = data.databricks_node_type.smallest.id
-  autotermination_minutes = 20
+  autotermination_minutes = 50
 
   spark_conf = {
     # Single-node
@@ -155,4 +150,32 @@ resource "databricks_secret_scope" "kv" {
     resource_id = azurerm_key_vault.this.id
     dns_name = azurerm_key_vault.this.vault_uri
   }
+}
+
+
+# SQL server for powering PowerBI
+# !!!!!! REMEMVER TO SET A SECRET PASSWORD FOR THE SERVER
+# !!!!!! NEVER STORE LOGIN DETAILS IN PLAIN TEXT
+resource "azurerm_mssql_server" "msserver" {
+  name                         = "comic-sqlserver"
+  resource_group_name          = azurerm_resource_group.myresourcegroup.name
+  location                     = azurerm_resource_group.myresourcegroup.location
+  version                      = "12.0"
+  administrator_login          = "4dm1n157r470r"
+  administrator_login_password = "4-v3ry-53cr37-p455w0rd"
+}
+
+resource "azurerm_mssql_database" "msdb" {
+  name           = "comic"
+  server_id      = azurerm_mssql_server.msserver.id
+  collation      = "SQL_Latin1_General_CP1_CI_AS"
+  max_size_gb    = 5
+  read_scale     = false
+  sku_name       = "S0"
+  zone_redundant = false
+
+  tags = {
+    Acceptance = "test"
+  }
+  depends_on = [azurerm_mssql_server.msserver]
 }
