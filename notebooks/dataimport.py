@@ -15,6 +15,7 @@ blob_service_client = BlobServiceClient.from_connection_string(connect_str)
 
 # COMMAND ----------
 
+# Get char data
 try:
   os.mkdir('/dbfs/data_comics')
 except Exception:
@@ -57,7 +58,7 @@ import shutil
 
 # COMMAND ----------
 
-# SHould be made parallelle or async
+# TODO: Make parallelle or async
 baseurl = 'https://en.wikipedia.org/w/api.php?'
 action = 'action=query'
 title = 'titles='
@@ -133,21 +134,21 @@ shutil.rmtree(local_path)
 
 # COMMAND ----------
 
-### Transformation of data
-# Load data from previous phase
-# TODO: Ensure that it loads correctly
-"""
-Transformation part
-* We will create a couple of dataframes/tables here that will be loaded into an SQL server
-- One table which is going to be used to model the social graph - Table 1
-- One that we have the primary data on a char
-  - How many connections
-  - Connections in DC
-  - Connections in Marvel
-  - Total sentiment
-  - Total rank (how many incoming connections compared to others)
-- Sentiment table - Contains all information on the processing of the data
-"""
+# MAGIC %md
+# MAGIC ### Transformation of data
+# MAGIC # Load data from previous phase
+# MAGIC # TODO: Ensure that it loads correctly
+# MAGIC 
+# MAGIC Transformation part
+# MAGIC * We will create a couple of dataframes/tables here that will be loaded into an SQL server
+# MAGIC - One table which is going to be used to model the social graph - Table 1
+# MAGIC - One that we have the primary data on a char
+# MAGIC   - How many connections
+# MAGIC   - Connections in DC
+# MAGIC   - Connections in Marvel
+# MAGIC   - Total sentiment
+# MAGIC   - Total rank (how many incoming connections compared to others)
+# MAGIC - Sentiment table - Contains all information on the processing of the data
 
 # COMMAND ----------
 
@@ -177,7 +178,7 @@ while i<len(documents):
 # COMMAND ----------
 
 local_path = "/dbfs/data_comics"
-container_name="transform"
+container_name_transform="transform"
 try:
   os.mkdir(local_path)
 except OSError:
@@ -194,7 +195,7 @@ for ele in res:
   file.write(json.dumps(ele))
   file.close()
   # Create a blob client using the local file name as the name for the blob
-  blob_client = blob_service_client.get_blob_client(container=container_name, blob=local_file_name)
+  blob_client = blob_service_client.get_blob_client(container=container_name_transform, blob=local_file_name)
   if ii%15==0:
     print("\nUploading to Azure Storage as blob:\n\t" + local_file_name)
   # Upload the created file
@@ -219,12 +220,7 @@ for ele in res:
 
 # COMMAND ----------
 
-## Add the GRAPH data to dataframe and upload to transformed bucket
-## Easy
-
-# COMMAND ----------
-
-# Create graph
+# Create graph links
 char_linked_list = [] #list with lists of links for each page
 for wiki_idx in tqdm(range(len(wiki_strings))):
     char_linked_list.append([list(character_links.split('|')[0] for character_links in re.findall(r'\[\[([^\]]+)\]\]', wiki_strings[wiki_idx]))])
@@ -244,6 +240,7 @@ for link_list in tqdm(range(len(char_linked_list))):
 
 # COMMAND ----------
 
+# Create Graph
 G = nx.DiGraph()
 
 for character in range(len(relevant_char_linked_list)):
@@ -254,12 +251,12 @@ for character in range(len(relevant_char_linked_list)):
 
 # COMMAND ----------
 
+#Upload Graph
 local_path = "/dbfs/data_comics"
 try:
   os.mkdir(local_path)
 except OSError:
   pass
-container_name_transform="transform"
 local_file_name = "UniverseGraph_Prod" + datetime.today().strftime('%Y_%m_%d') + ".txt"
 upload_file_path = os.path.join(local_path, local_file_name)
 file = open(upload_file_path, 'wb')
@@ -272,6 +269,7 @@ shutil.rmtree(local_path)
 
 # COMMAND ----------
 
+# Load graph from blob
 blob_client = blob_service_client.get_blob_client(container=container_name_transform, blob="UniverseGraph_Prod2021_06_16.txt")
 with open("/dbfs/UniverseGraph2021_06_13.txt", "wb") as download_file:
     download_file.write(blob_client.download_blob().readall())
@@ -279,7 +277,7 @@ G = pickle.load(open('/dbfs/UniverseGraph2021_06_13.txt', 'rb'))
 
 # COMMAND ----------
 
-# DF two with associate information
+# DF with associate information
 degree = []
 for n, d in G.out_degree():
   degree.append((n,G.in_degree()[n],d))
@@ -325,11 +323,7 @@ def pandas_to_spark(pandas_df):
 
 # COMMAND ----------
 
-"""
-Graph end - Text only
-"""
-
-# Marvel v DC
+# Transform graph to largect CC
 
 # Identifying and extracting the giant connected component
 largest_connected_component = max(nx.weakly_connected_components(G), key=len)
@@ -341,7 +335,7 @@ print('number of edges in giant component subgraph: ', len(Gc.edges))
 
 # COMMAND ----------
 
-# Graph visualisation
+# Convert Graph to table for PowerBI
 _res= []
 k=set([x for x in degree.sort_values("in_degree",ascending=False)[0:20].Charater.values])
 for ele in list(Gc.edges):
@@ -369,12 +363,12 @@ graph_df = graph_df[graph_df['from'].apply(lambda x: True if x in k else False)]
 
 # COMMAND ----------
 
+# Upload DF to blob storage
 local_path = "/dbfs/data_comics"
 try:
   os.mkdir(local_path)
 except OSError:
   pass
-
 local_file_name = "WikiDataframe_prod" + datetime.today().strftime('%Y_%m_%d') + ".txt"
 upload_file_path = os.path.join(local_path, local_file_name)
 file = open(upload_file_path, 'wb')
@@ -386,6 +380,7 @@ with open(upload_file_path, "rb") as data:
 
 # COMMAND ----------
 
+# Load DF into Blob
 blob_client = blob_service_client.get_blob_client(container=container_name_transform, blob="WikiDataframe_prod2021_06_16.txt")
 with open("/dbfs/WikiDataframe_prod2021_06_16.txt", "wb") as download_file:
     download_file.write(blob_client.download_blob().readall())
@@ -393,12 +388,14 @@ df = pickle.load(open('/dbfs/WikiDataframe_prod2021_06_16.txt', 'rb'))
 
 # COMMAND ----------
 
+# Convert to spark
 df_db=pandas_to_spark(df)
 degree_db=pandas_to_spark(degree)
 graph_df_db = pandas_to_spark(graph_df)
 
 # COMMAND ----------
 
+# Insert in SQL database
 df_db.write.jdbc(url=jdbcUrl, table="CharacterData", properties=connectionProperties)
 degree_db.write.jdbc(url=jdbcUrl, table="CharacterDegree", properties=connectionProperties)
 graph_df_db.write.jdbc(url=jdbcUrl, table="CharacterGraph", properties=connectionProperties)
